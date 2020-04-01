@@ -199,6 +199,8 @@ public class NotificationPanelViewController extends PanelViewController {
             "lineagesystem:" + LineageSettings.System.STATUS_BAR_QUICK_QS_PULLDOWN;
     private static final String DOUBLE_TAP_SLEEP_GESTURE =
             "lineagesystem:" + LineageSettings.System.DOUBLE_TAP_SLEEP_GESTURE;
+    private static final String LOCKSCREEN_ENABLE_QS =
+            "system:" + Settings.System.LOCKSCREEN_ENABLE_QS;
 
     private static final Rect M_DUMMY_DIRTY_RECT = new Rect(0, 0, 1, 1);
     private static final Rect EMPTY_RECT = new Rect();
@@ -429,6 +431,8 @@ public class NotificationPanelViewController extends PanelViewController {
     private boolean mDoubleTapToSleepEnabled;
     private GestureDetector mDoubleTapGesture;
 
+    private boolean mStatusBarShownOnSecureKeyguard;
+
     /**
      * Cache the resource id of the theme to avoid unnecessary work in onThemeChanged.
      *
@@ -556,6 +560,11 @@ public class NotificationPanelViewController extends PanelViewController {
                             mFirstBypassAttempt = false;
                             mDelayShowingKeyguardStatusBar = false;
                         }
+                    }
+
+                    @Override
+                    public void onKeyguardShowingChanged() {
+                        mStatusBar.updateQsExpansionEnabled();
                     }
                 };
         mKeyguardStateController.addCallback(keyguardMonitorCallback);
@@ -977,10 +986,21 @@ public class NotificationPanelViewController extends PanelViewController {
         mAnimateNextPositionUpdate = true;
     }
 
+    private boolean isQSEventBlocked() {
+        if (!mKeyguardStateController.isShowing())
+            return false;
+
+        if (!mKeyguardStateController.isMethodSecure())
+            return false;
+
+        return !mStatusBarShownOnSecureKeyguard;
+    }
+
     public void setQsExpansionEnabled(boolean qsExpansionEnabled) {
-        mQsExpansionEnabled = qsExpansionEnabled;
+        mQsExpansionEnabled = qsExpansionEnabled && !isQSEventBlocked();
         if (mQs == null) return;
-        mQs.setHeaderClickable(qsExpansionEnabled);
+        mQs.setHeaderClickable(mQsExpansionEnabled);
+        mQs.setSecureExpandDisabled(!mQsExpansionEnabled);
     }
 
     @Override
@@ -1045,7 +1065,7 @@ public class NotificationPanelViewController extends PanelViewController {
     }
 
     public void expandWithQs() {
-        if (mQsExpansionEnabled) {
+        if (mQsExpansionEnabled && !isQSEventBlocked()) {
             mQsExpandImmediate = true;
             mNotificationStackScroller.setShouldShowShelfOnly(true);
         }
@@ -1281,7 +1301,8 @@ public class NotificationPanelViewController extends PanelViewController {
     private boolean handleQsTouch(MotionEvent event) {
         final int action = event.getActionMasked();
         if (action == MotionEvent.ACTION_DOWN && getExpandedFraction() == 1f
-                && mBarState != StatusBarState.KEYGUARD && !mQsExpanded && mQsExpansionEnabled) {
+                && mBarState != StatusBarState.KEYGUARD && !mQsExpanded
+                && mQsExpansionEnabled && !isQSEventBlocked()) {
 
             // Down in the empty area while fully expanded - go to QS.
             mQsTracking = true;
@@ -1303,7 +1324,8 @@ public class NotificationPanelViewController extends PanelViewController {
         if (action == MotionEvent.ACTION_CANCEL || action == MotionEvent.ACTION_UP) {
             mConflictingQsExpansionGesture = false;
         }
-        if (action == MotionEvent.ACTION_DOWN && isFullyCollapsed() && mQsExpansionEnabled) {
+        if (action == MotionEvent.ACTION_DOWN && isFullyCollapsed()
+                && mQsExpansionEnabled && !isQSEventBlocked()) {
             mTwoFingerQsExpandPossible = true;
         }
         if (mTwoFingerQsExpandPossible && isOpenQsEvent(event) && event.getY(event.getActionIndex())
@@ -1361,7 +1383,8 @@ public class NotificationPanelViewController extends PanelViewController {
         }
         showQsOverride &= mBarState == StatusBarState.SHADE;
 
-        return twoFingerDrag || showQsOverride || stylusButtonClickDrag || mouseButtonClickDrag;
+        return !isQSEventBlocked() && (twoFingerDrag || showQsOverride
+                || stylusButtonClickDrag || mouseButtonClickDrag);
     }
 
     private void handleQsDown(MotionEvent event) {
@@ -1958,7 +1981,7 @@ public class NotificationPanelViewController extends PanelViewController {
      * @return Whether we should intercept a gesture to open Quick Settings.
      */
     private boolean shouldQuickSettingsIntercept(float x, float y, float yDiff) {
-        if (!mQsExpansionEnabled || mCollapsedOnDown || (mKeyguardShowing
+        if (!mQsExpansionEnabled || mCollapsedOnDown || isQSEventBlocked() || (mKeyguardShowing
                 && mKeyguardBypassController.getBypassEnabled())) {
             return false;
         }
@@ -2860,6 +2883,7 @@ public class NotificationPanelViewController extends PanelViewController {
             mQs.setHeaderClickable(mQsExpansionEnabled);
             updateQSPulseExpansion();
             mQs.setOverscrolling(mStackScrollerOverscrolling);
+            mQs.setSecureExpandDisabled(isQSEventBlocked());
 
             // recompute internal state when qspanel height changes
             mQs.getView().addOnLayoutChangeListener(
@@ -3291,7 +3315,7 @@ public class NotificationPanelViewController extends PanelViewController {
             if (mQsExpanded) {
                 flingSettings(0 /* vel */, FLING_COLLAPSE, null /* onFinishRunnable */,
                         true /* isClick */);
-            } else if (mQsExpansionEnabled) {
+            } else if (mQsExpansionEnabled && !isQSEventBlocked()) {
                 mLockscreenGestureLogger.write(MetricsEvent.ACTION_SHADE_QS_TAP, 0, 0);
                 flingSettings(0 /* vel */, FLING_EXPAND, null /* onFinishRunnable */,
                         true /* isClick */);
@@ -3304,7 +3328,7 @@ public class NotificationPanelViewController extends PanelViewController {
         @Override
         public void onOverscrollTopChanged(float amount, boolean isRubberbanded) {
             cancelQsAnimation();
-            if (!mQsExpansionEnabled) {
+            if (!mQsExpansionEnabled || isQSEventBlocked()) {
                 amount = 0f;
             }
             float rounded = amount >= 1f ? amount : 0f;
@@ -3320,8 +3344,8 @@ public class NotificationPanelViewController extends PanelViewController {
             mLastOverscroll = 0f;
             mQsExpansionFromOverscroll = false;
             setQsExpansion(mQsExpansionHeight);
-            flingSettings(!mQsExpansionEnabled && open ? 0f : velocity,
-                    open && mQsExpansionEnabled ? FLING_EXPAND : FLING_COLLAPSE, () -> {
+            flingSettings((!mQsExpansionEnabled || isQSEventBlocked()) && open ? 0f : velocity,
+                    open && (mQsExpansionEnabled && !isQSEventBlocked()) ? FLING_EXPAND : FLING_COLLAPSE, () -> {
                         mStackScrollerOverscrolling = false;
                         setOverScrolling(false);
                         updateQsState();
@@ -3592,11 +3616,16 @@ public class NotificationPanelViewController extends PanelViewController {
             boolean keyguardFadingAway = mKeyguardStateController.isKeyguardFadingAway();
             int oldState = mBarState;
             boolean keyguardShowing = statusBarState == StatusBarState.KEYGUARD;
+            boolean keyguardOrShadeShowing = statusBarState == StatusBarState.KEYGUARD
+                    || statusBarState == StatusBarState.SHADE_LOCKED;
             setKeyguardStatusViewVisibility(statusBarState, keyguardFadingAway, goingToFullShade);
             setKeyguardBottomAreaVisibility(statusBarState, goingToFullShade);
 
             mBarState = statusBarState;
             mKeyguardShowing = keyguardShowing;
+            if (mQs != null) {
+                mQs.setSecureExpandDisabled(isQSEventBlocked());
+            }
 
             if (oldState == StatusBarState.KEYGUARD && (goingToFullShade
                     || statusBarState == StatusBarState.SHADE_LOCKED)) {
@@ -3664,6 +3693,7 @@ public class NotificationPanelViewController extends PanelViewController {
             mConfigurationController.addCallback(mConfigurationListener);
             mTunerService.addTunable(this, STATUS_BAR_QUICK_QS_PULLDOWN);
             mTunerService.addTunable(this, DOUBLE_TAP_SLEEP_GESTURE);
+            mTunerService.addTunable(this, LOCKSCREEN_ENABLE_QS);
             mUpdateMonitor.registerCallback(mKeyguardUpdateCallback);
             // Theme might have changed between inflating this view and attaching it to the
             // window, so
@@ -3687,6 +3717,14 @@ public class NotificationPanelViewController extends PanelViewController {
                 mOneFingerQuickSettingsIntercept = TunerService.parseInteger(newValue, 1);
             } else if (DOUBLE_TAP_SLEEP_GESTURE.equals(key)) {
                 mDoubleTapToSleepEnabled = TunerService.parseIntegerSwitch(newValue, true);
+            switch (key) {
+                case LOCKSCREEN_ENABLE_QS:
+                    mStatusBarShownOnSecureKeyguard =
+                            TunerService.parseIntegerSwitch(newValue, true);
+                    mStatusBar.updateQsExpansionEnabled();
+                    break;
+                default:
+                    break;
             }
         }
     }
