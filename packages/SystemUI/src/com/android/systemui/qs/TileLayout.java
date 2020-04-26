@@ -111,6 +111,12 @@ public class TileLayout extends ViewGroup implements QSTileLayout {
     public boolean updateResources() {
         final Resources res = mContext.getResources();
         mResourceColumns = Math.max(1, res.getInteger(R.integer.quick_settings_num_columns));
+
+        int col_portrait = res.getInteger(R.integer.config_qs_columns_portrait);
+        int row_portrait = res.getInteger(R.integer.config_qs_rows_portrait);
+        int col_landscape = res.getInteger(R.integer.config_qs_columns_landscape);
+        int row_landscape = res.getInteger(R.integer.config_qs_rows_landscape);
+        
         mCellHeight = mContext.getResources().getDimensionPixelSize(R.dimen.qs_tile_height);
         mCellMarginHorizontal = res.getDimensionPixelSize(R.dimen.qs_tile_margin_horizontal);
         mCellMarginVertical= res.getDimensionPixelSize(R.dimen.qs_tile_margin_vertical);
